@@ -6,7 +6,7 @@ from compare import (
     compare_positional,
     load_timetable,
 )
-from export import build_updated_excel
+from export import build_diff_only_excel, build_updated_excel
 
 st.set_page_config(page_title="Comparar TIMETABLE", layout="wide")
 st.title("Comparar TIMETABLE")
@@ -118,14 +118,30 @@ xlsx_bytes = build_updated_excel(
     compare["sheet"],
     key_cols=compare["keys"] or None,
 )
-st.download_button(
-    "Baixar Excel atualizado",
-    data=xlsx_bytes,
-    file_name="timetable_atualizado.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    type="primary",
-    help="Cópia do arquivo antigo, com a TIMETABLE já alterada. Amarelo = célula mudou, verde = linha nova.",
+diff_only_bytes = build_diff_only_excel(
+    compare["old_bytes"],
+    result,
+    compare["sheet"],
 )
+
+col_dl1, col_dl2, _spacer = st.columns([1, 2.5, 3], gap="small")
+with col_dl1:
+    st.download_button(
+        "Baixar Excel atualizado",
+        data=xlsx_bytes,
+        file_name="timetable_atualizado.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        help="Cópia do arquivo antigo, com a TIMETABLE já alterada. Amarelo = célula mudou, verde = linha nova.",
+    )
+with col_dl2:
+    st.download_button(
+        "Baixar apenas alterações",
+        data=diff_only_bytes,
+        file_name="timetable_apenas_alteracoes.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        help="Mesma config da tabela antiga, mas só com as células que mudaram ou linhas novas. Sem linhas removidas.",
+    )
 
 tab_mod, tab_add, tab_rem, tab_prev = st.tabs(
     ["Alterações", "Adicionadas", "Removidas", "Prévia das planilhas"]
