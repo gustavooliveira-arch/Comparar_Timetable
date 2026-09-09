@@ -1,0 +1,243 @@
+"""Gera um arquivo de cenário a partir do modelo e da TIMETABLE nova."""
+
+from __future__ import annotations
+
+from copy import copy
+from datetime import datetime, time
+from io import BytesIO
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+from openpyxl import load_workbook
+from openpyxl.worksheet.worksheet import Worksheet
+
+from compare import _cell_str, _normalize_column_name
+
+MODELO_CENARIO_PADRAO = Path(
+    r"c:\Users\gustavo.oliveira\Documents\Automação\Timetables\Modelo Cenario.xlsx"
+)
+
+HEADER_ROW = 2
+DATA_START_ROW = 3
+
+PREFERRED_SOURCES: dict[str, list[str]] = {
+    "linha": ["codigo linha", "código linha", "linha"],
+    "frota": ["frota real", "frota", "frota teste", "classe"],
+    "partida": ["1º embarque", "1o embarque", "primeiro embarque", "partida"],
+    "chegada": [
+        "último desembarque",
+        "ultimo desembarque",
+        "chegada",
+    ],
+    "local (lib.)": ["local (lib.)", "local (lib)"],
+    "local (rec.)": ["local (rec.)", "local (rec)"],
+    "d.o. (lib.)": ["d.o. (lib.)", "d.o. (lib)"],
+    "d.o. (rec.)": ["d.o. (rec.)", "d.o. (rec)"],
+    "serviço": ["serviço", "servico"],
+    "t. e.": ["t. e.", "t.e.", "te"],
+    "t.d.": ["t.d.", "td"],
+}
+
+TP_GR = time(1, 30)
+TP_OUTROS = time(0, 45)
+
+
+def _norm(name: Any) -> str:
+    return _normalize_column_name(name)
+
+
+def _is_etapa(name: str) -> bool:
+    n = _norm(name)
+    return n == "etapa" or n.startswith("etapa/")
+
+
+def _is_tp(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n in {"t.p.", "t.p", "tp"}
+
+
+def _is_local_rec(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n.startswith("local(rec")
+
+
+def _source_lookup(df: pd.DataFrame) -> dict[str, str]:
+    return {_norm(col): col for col in df.columns}
+
+
+def resolve_source_column(scenario_col: str, lookup: dict[str, str]) -> str | None:
+    n = _norm(scenario_col)
+    preferred = PREFERRED_SOURCES.get(n)
+    if preferred:
+        for alias in preferred:
+            if alias in lookup:
+                return lookup[alias]
+    if n in lookup:
+        return lookup[n]
+    compact = n.replace(" ", "")
+    for key, original in lookup.items():
+        if key.replace(" ", "") == compact:
+            return original
+    return None
+
+
+def _parse_time(value: Any) -> time | None:
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return None
+    if isinstance(value, time):
+        return value
+    if isinstance(value, datetime):
+        return value.time()
+    text = _cell_str(value)
+    if not text:
+        return None
+    for fmt in ("%H:%M:%S", "%H:%M"):
+        try:
+            return datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+    return None
+
+
+def _parse_value(value: Any, sample: Any = None) -> Any:
+    if isinstance(sample, time) or (
+        hasattr(sample, "strftime") and not isinstance(sample, datetime)
+    ):
+        parsed = _parse_time(value)
+        if parsed is not None:
+            return parsed
+    parsed_time = _parse_time(value)
+    if parsed_time is not None and isinstance(sample, time):
+        return parsed_time
+    text = _cell_str(value)
+    if text == "":
+        return None
+    if isinstance(sample, (int, float)) and not isinstance(sample, bool):
+        try:
+            number = float(text.replace(",", "."))
+            if number.is_integer():
+                return int(number)
+            return number
+        except ValueError:
+            return text
+    if text.lstrip("-").isdigit():
+        try:
+            return int(text)
+        except ValueError:
+            return text
+    if parsed_time is not None:
+        return parsed_time
+    return text
+
+
+def _copy_style(source, target) -> None:
+    if source.has_style:
+        target.font = copy(source.font)
+        target.border = copy(source.border)
+        target.fill = copy(source.fill)
+        target.alignment = copy(source.alignment)
+        target.protection = copy(source.protection)
+    target.number_format = source.number_format
+
+
+def _headers(ws: Worksheet, header_row: int = HEADER_ROW) -> dict[str, int]:
+    mapping: dict[str, int] = {}
+    for col in range(1, (ws.max_column or 1) + 1):
+        value = ws.cell(header_row, col).value
+        if value is None or str(value).strip() == "":
+            continue
+        mapping[str(value).strip()] = col
+    return mapping
+
+
+def _local_rec_starts_with_gr(value: Any) -> bool:
+    text = _cell_str(value).strip().casefold()
+    return text.startswith("gr")
+
+
+def tp_for_local_rec(local_rec: Any) -> time:
+    return TP_GR if _local_rec_starts_with_gr(local_rec) else TP_OUTROS
+
+
+def build_cenario_excel(
+    timetable: pd.DataFrame,
+    modelo_path: str | Path | None = None,
+) -> bytes:
+    path = Path(modelo_path) if modelo_path else MODELO_CENARIO_PADRAO
+    if not path.exists():
+        raise FileNotFoundError(
+            f"Modelo de cenário não encontrado: {path}"
+        )
+
+    wb = load_workbook(path)
+    ws = wb.active
+    headers = _headers(ws)
+    if not headers:
+        raise ValueError("O modelo de cenário não tem cabeçalho na linha 2.")
+
+    lookup = _source_lookup(timetable)
+    sample_row = DATA_START_ROW
+    last_template_row = ws.max_row or DATA_START_ROW
+    default_values = {
+        col_idx: ws.cell(sample_row, col_idx).value
+        for col_idx in headers.values()
+    }
+
+    local_rec_col_name = next(
+        (name for name in headers if _is_local_rec(name)),
+        None,
+    )
+    etapa_cols = [name for name in headers if _is_etapa(name)]
+    tp_cols = [name for name in headers if _is_tp(name)]
+
+    n_rows = len(timetable)
+    target_last = DATA_START_ROW + n_rows - 1 if n_rows else DATA_START_ROW - 1
+
+    if last_template_row > max(target_last, DATA_START_ROW - 1):
+        ws.delete_rows(
+            target_last + 1,
+            last_template_row - target_last,
+        )
+
+    for offset in range(n_rows):
+        excel_row = DATA_START_ROW + offset
+        src = timetable.iloc[offset]
+        local_rec_value = None
+
+        if local_rec_col_name:
+            source_col = resolve_source_column(local_rec_col_name, lookup)
+            if source_col is not None:
+                local_rec_value = src[source_col]
+
+        for name, col_idx in headers.items():
+            sample_cell = ws.cell(sample_row, col_idx)
+            cell = ws.cell(excel_row, col_idx)
+            if excel_row != sample_row:
+                _copy_style(sample_cell, cell)
+
+            if _is_etapa(name):
+                cell.value = 1
+                continue
+
+            if _is_tp(name):
+                cell.value = tp_for_local_rec(local_rec_value)
+                continue
+
+            source_col = resolve_source_column(name, lookup)
+            if source_col is None:
+                cell.value = default_values.get(col_idx)
+                continue
+
+            cell.value = _parse_value(src[source_col], sample_cell.value)
+
+        for name in etapa_cols:
+            ws.cell(excel_row, headers[name]).value = 1
+        for name in tp_cols:
+            ws.cell(excel_row, headers[name]).value = tp_for_local_rec(
+                local_rec_value
+            )
+
+    out = BytesIO()
+    wb.save(out)
+    return out.getvalue()
