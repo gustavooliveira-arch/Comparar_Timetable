@@ -108,3 +108,47 @@ def test_export_keeps_other_sheets_and_applies_changes():
     assert ws["B4"].value == "Bio"
     assert ws["B4"].fill.fgColor.rgb in ("00C6EFCE", "C6EFCE")
     assert ws.column_dimensions["B"].width == 22
+
+
+def test_cenario_etapa_and_tp_by_local_rec(tmp_path):
+    from datetime import time as dt_time
+
+    from cenario import build_cenario_excel, tp_for_local_rec
+
+    assert tp_for_local_rec("GRITA") == dt_time(1, 30)
+    assert tp_for_local_rec("GTRIT") == dt_time(0, 45)
+    assert tp_for_local_rec("GECOM") == dt_time(0, 45)
+
+    modelo = tmp_path / "modelo.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws["A1"] = "GRUPO"
+    ws["A2"] = "EMPRESA"
+    ws["B2"] = "ETAPA/SEÇÃO"
+    ws["C2"] = "LOCAL (REC.)"
+    ws["D2"] = "T.P."
+    ws["E2"] = "SERVIÇO"
+    ws["A3"] = 1001
+    ws["B3"] = 9
+    ws["C3"] = "XXX"
+    ws["D3"] = dt_time(0, 45)
+    ws["E3"] = "OLD"
+    wb.save(modelo)
+
+    timetable = pd.DataFrame(
+        {
+            "EMPRESA": ["1001", "1001"],
+            "SERVIÇO": ["SVC1", "SVC2"],
+            "LOCAL (REC.)": ["GRITA", "GECOM"],
+        }
+    )
+    out = build_cenario_excel(timetable, modelo)
+    result = load_workbook(BytesIO(out))
+    ws = result.active
+    assert ws["B3"].value == 1
+    assert ws["B4"].value == 1
+    assert ws["C3"].value == "GRITA"
+    assert ws["D3"].value == dt_time(1, 30)
+    assert ws["D4"].value == dt_time(0, 45)
+    assert ws["E3"].value == "SVC1"
+    assert ws["E4"].value == "SVC2"
