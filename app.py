@@ -1,3 +1,5 @@
+import io
+
 import streamlit as st
 import pandas as pd
 
@@ -78,24 +80,39 @@ if not file_old or not file_new:
     st.stop()
 
 # ============================================================
-# CARREGAMENTO
+# CARREGAMENTO (com cache)
+#
+# Sem cache, `load_timetable` reprocessava os dois arquivos Excel
+# inteiros a CADA interação da página (zoom, seleção de célula etc.),
+# porque o Streamlit reexecuta o script do início a cada rerun.
+#
+# `st.cache_data` guarda o resultado por conteúdo (hash dos bytes +
+# nome da aba), então o parsing do Excel só roda de novo se o
+# arquivo ou a aba realmente mudarem.
 # ============================================================
+
+
+@st.cache_data(show_spinner="Lendo planilha...")
+def _carregar_timetable_cache(conteudo: bytes, sheet_name: str):
+    return load_timetable(
+        io.BytesIO(conteudo),
+        sheet_name=sheet_name,
+    )
+
 
 file_old.seek(0)
 file_new.seek(0)
 
 try:
 
-    df_old = load_timetable(
-        file_old,
-        sheet_name=sheet
+    df_old = _carregar_timetable_cache(
+        file_old.getvalue(),
+        sheet
     )
 
-    file_new.seek(0)
-
-    df_new = load_timetable(
-        file_new,
-        sheet_name=sheet
+    df_new = _carregar_timetable_cache(
+        file_new.getvalue(),
+        sheet
     )
 
 except Exception as exc:
@@ -254,34 +271,55 @@ def _coluna_correspondente(coluna, origem, destino):
     return None
 
 
-def _linha_correspondente(linha, origem, destino, chaves):
+def _construir_indice(chaves, origem, destino):
+    """
+    Cria um mapa (valores das chaves) -> posição da linha em `destino`.
+
+    Sem isso, cada clique numa célula da prévia disparava uma busca
+    linear O(n) em `destino` (ver versão anterior de
+    `_linha_correspondente`). Para planilhas grandes, isso deixava a
+    navegação lenta. Construindo o índice UMA VEZ, logo depois da
+    comparação, a busca de linha correspondente vira O(1).
+    """
+
+    if not chaves:
+        return None
+
+    chaves_destino = []
+
+    for chave in chaves:
+        correspondente = _coluna_correspondente(chave, origem, destino)
+
+        if correspondente is None:
+            return None
+
+        chaves_destino.append(correspondente)
+
+    indice = {}
+
+    for posicao in range(len(destino)):
+        valores = tuple(
+            str(destino.iloc[posicao][coluna])
+            for coluna in chaves_destino
+        )
+
+        # Em caso de chaves duplicadas, mantém a primeira ocorrência
+        # (mesmo comportamento da busca linear original).
+        indice.setdefault(valores, posicao)
+
+    return indice
+
+
+def _linha_correspondente(linha, origem, destino, chaves, indice=None):
     if linha is None or linha < 0 or linha >= len(origem):
         return None
 
-    if chaves:
-        chaves_origem = [c for c in chaves if c in origem.columns]
-        chaves_destino = []
-
-        for chave in chaves_origem:
-            correspondente = _coluna_correspondente(chave, origem, destino)
-            if correspondente is None:
-                chaves_destino = []
-                break
-            chaves_destino.append(correspondente)
-
-        if chaves_origem and len(chaves_destino) == len(chaves_origem):
-            valores = tuple(
-                str(origem.iloc[linha][chave])
-                for chave in chaves_origem
-            )
-
-            for indice in range(len(destino)):
-                atual = tuple(
-                    str(destino.iloc[indice][chave])
-                    for chave in chaves_destino
-                )
-                if atual == valores:
-                    return indice
+    if chaves and indice is not None:
+        valores = tuple(
+            str(origem.iloc[linha][chave])
+            for chave in chaves
+        )
+        return indice.get(valores)
 
     if linha < len(destino):
         return linha
@@ -289,13 +327,13 @@ def _linha_correspondente(linha, origem, destino, chaves):
     return None
 
 
-def _celula_correspondente(celula, origem, destino, chaves):
+def _celula_correspondente(celula, origem, destino, chaves, indice=None):
     if not celula or len(celula) != 2:
         return None
 
     linha, coluna = celula[0], celula[1]
     coluna_dest = _coluna_correspondente(coluna, origem, destino)
-    linha_dest = _linha_correspondente(linha, origem, destino, chaves)
+    linha_dest = _linha_correspondente(linha, origem, destino, chaves, indice)
 
     if coluna_dest is None or linha_dest is None:
         return None
@@ -315,7 +353,7 @@ def _celulas_do_widget(chave_widget):
         return []
 
 
-def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves):
+def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves, indice=None):
     celulas = _celulas_do_widget(origem_key)
 
     if not celulas:
@@ -329,6 +367,7 @@ def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves
         origem,
         destino,
         chaves,
+        indice,
     )
 
     st.session_state[destino_key] = {
@@ -428,6 +467,30 @@ if st.button(
     # Volta para o início do arquivo antigo
     file_old.seek(0)
 
+    # ----------------------------------------------------
+    # Índices pré-calculados para a navegação da prévia
+    # (evita busca linear O(n) a cada clique numa célula).
+    # Só fazem sentido no modo "chave".
+    # ----------------------------------------------------
+    indice_old_to_new = (
+        _construir_indice(keys, df_old, df_new)
+        if mode == "chave"
+        else None
+    )
+
+    indice_new_to_old = (
+        _construir_indice(keys, df_new, df_old)
+        if mode == "chave"
+        else None
+    )
+
+    # Versão da comparação: usada como chave de cache para não
+    # regerar os Excels/estilos em reruns que não mudam o resultado
+    # (zoom, seleção de célula, gerar cenário etc.).
+    st.session_state.compare_version = (
+        st.session_state.get("compare_version", 0) + 1
+    )
+
     st.session_state.compare = {
 
         "result": result,
@@ -439,10 +502,20 @@ if st.button(
         "sheet": sheet,
 
         "mode": mode,
+
+        "indice_old_to_new": indice_old_to_new,
+
+        "indice_new_to_old": indice_new_to_old,
+
+        "version": st.session_state.compare_version,
     }
 
     st.session_state.pop("preview_old", None)
     st.session_state.pop("preview_new", None)
+
+    # Invalida os caches de Excel/estilo da comparação anterior
+    st.session_state.pop("_excel_cache_key", None)
+    st.session_state.pop("_style_cache_key", None)
 
 
 # ============================================================
@@ -609,25 +682,42 @@ c3.metric(
 )
 
 # ============================================================
-# GERAÇÃO DOS EXCELS
+# GERAÇÃO DOS EXCELS (com cache por versão da comparação)
+#
+# Antes, esses dois arquivos eram reconstruídos do zero em TODA
+# interação da página (zoom, clique em célula, gerar cenário...).
+# Agora só são regenerados quando uma nova comparação é feita
+# (`compare["version"]` muda), e ficam guardados em session_state
+# no restante do tempo.
 # ============================================================
 
-xlsx_bytes = build_updated_excel(
-    compare["old_bytes"],
-    result,
-    compare["sheet"],
-    key_cols=(
-        compare["keys"]
-        if compare["keys"]
-        else None
-    ),
-)
+excel_cache_key = compare["version"]
 
-diff_only_bytes = build_diff_only_excel(
-    compare["old_bytes"],
-    result,
-    compare["sheet"],
-)
+if st.session_state.get("_excel_cache_key") != excel_cache_key:
+
+    with st.spinner("Gerando arquivos Excel para download..."):
+
+        st.session_state.xlsx_bytes = build_updated_excel(
+            compare["old_bytes"],
+            result,
+            compare["sheet"],
+            key_cols=(
+                compare["keys"]
+                if compare["keys"]
+                else None
+            ),
+        )
+
+        st.session_state.diff_only_bytes = build_diff_only_excel(
+            compare["old_bytes"],
+            result,
+            compare["sheet"],
+        )
+
+    st.session_state._excel_cache_key = excel_cache_key
+
+xlsx_bytes = st.session_state.xlsx_bytes
+diff_only_bytes = st.session_state.diff_only_bytes
 
 # ============================================================
 # DOWNLOAD
@@ -869,6 +959,24 @@ with tab_prev:
     left, right = st.columns(2, gap="small")
 
     # =========================================
+    # ESTILO DO ARQUIVO NOVO (com cache por versão da comparação)
+    #
+    # Montar o Styler percorre célula a célula; sem cache isso
+    # rodava de novo a cada clique de zoom/seleção, mesmo sem a
+    # comparação ter mudado.
+    # =========================================
+    style_cache_key = compare["version"]
+
+    if st.session_state.get("_style_cache_key") != style_cache_key:
+        st.session_state.df_new_styled = destacar_diferencas_novo(
+            df_new,
+            result,
+        )
+        st.session_state._style_cache_key = style_cache_key
+
+    df_new_styled = st.session_state.df_new_styled
+
+    # =========================================
     # ARQUIVO ANTIGO — SEM DESTAQUE
     # =========================================
     with left:
@@ -885,6 +993,7 @@ with tab_prev:
                 df_old,
                 df_new,
                 chaves_previa,
+                compare.get("indice_old_to_new"),
             ),
             selection_mode="single-cell",
             height=table_height,
@@ -898,11 +1007,6 @@ with tab_prev:
     with right:
         st.subheader("Novo")
 
-        df_new_styled = destacar_diferencas_novo(
-            df_new,
-            result
-        )
-
         st.dataframe(
             df_new_styled,
             use_container_width=True,
@@ -914,6 +1018,7 @@ with tab_prev:
                 df_new,
                 df_old,
                 chaves_previa,
+                compare.get("indice_new_to_old"),
             ),
             selection_mode="single-cell",
             height=table_height,
