@@ -526,7 +526,6 @@ compare = st.session_state.get(
     "compare"
 )
 
-
 if not compare:
 
     with st.expander(
@@ -886,16 +885,16 @@ with tab_prev:
 
     chaves_previa = compare["keys"] if compare["mode"] == "chave" else []
 
-    z1, z2, z3, z4, z5 = st.columns([1.1, 1.1, 1.2, 1.8, 2.2])
+    z1, z2, z3, z4 = st.columns([1.1, 1.1, 1.1, 1.1])
 
     with z1:
-        if st.button("Diminuir zoom", key="preview_zoom_out"):
+        if st.button("Diminuir zoom", key="preview_zoom_out", use_container_width=True):
             st.session_state.preview_zoom = max(
                 80, st.session_state.preview_zoom - 10
             )
 
     with z2:
-        if st.button("Aumentar zoom", key="preview_zoom_in"):
+        if st.button("Aumentar zoom", key="preview_zoom_in", use_container_width=True):
             st.session_state.preview_zoom = min(
                 180, st.session_state.preview_zoom + 10
             )
@@ -907,13 +906,11 @@ with tab_prev:
     table_height = max(520, int(560 * zoom))
 
     with z3:
-        st.caption(f"Zoom {zoom_pct}%")
-
-    with z4:
         gerar = st.button(
             "Gerar Novo Cenário",
             key="gerar_cenario",
             type="primary",
+            use_container_width=True
         )
 
     if gerar:
@@ -924,7 +921,7 @@ with tab_prev:
             st.session_state.cenario_bytes = None
             st.session_state.cenario_error = str(exc)
 
-    with z5:
+    with z4:
         if st.session_state.get("cenario_bytes"):
             st.download_button(
                 "Baixar novo cenário",
@@ -936,6 +933,7 @@ with tab_prev:
                     "spreadsheetml.sheet"
                 ),
                 key="dl_cenario",
+                use_container_width=True
             )
 
     if st.session_state.get("cenario_error"):
