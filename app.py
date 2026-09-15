@@ -115,6 +115,15 @@ try:
         sheet
     )
 
+    # A Planilha3 também vem do arquivo novo.
+    # Não alteramos df_new: ele continua sendo a TIMETABLE usada
+    # na comparação e na prévia.
+    df_planilha3 = pd.read_excel(
+        io.BytesIO(file_new.getvalue()),
+        sheet_name="Planilha3",
+        header=None,
+    )
+
 except Exception as exc:
 
     st.error(str(exc))
@@ -915,7 +924,10 @@ with tab_prev:
 
     if gerar:
         try:
-            st.session_state.cenario_bytes = build_cenario_excel(df_new)
+            st.session_state.cenario_bytes = build_cenario_excel(
+                df_new,
+                planilha3=df_planilha3,
+            )
             st.session_state.cenario_error = None
         except Exception as exc:
             st.session_state.cenario_bytes = None

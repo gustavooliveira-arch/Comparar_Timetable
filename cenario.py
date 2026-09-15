@@ -42,7 +42,6 @@ PREFERRED_SOURCES: dict[str, list[str]] = {
 TP_GR = time(1, 30)
 TP_OUTROS = time(0, 45)
 
-
 def _norm(name: Any) -> str:
     return _normalize_column_name(name)
 
@@ -55,6 +54,13 @@ def _is_etapa(name: str) -> bool:
 def _is_tp(name: str) -> bool:
     n = _norm(name).replace(" ", "")
     return n in {"t.p.", "t.p", "tp"}
+
+def _is_tipo(name: str) -> bool:
+    return _norm(name) == "tipo"
+
+
+def _is_qua(name: str) -> bool:
+    return _norm(name) == "qua"
 
 
 def _is_local_rec(name: str) -> bool:
@@ -163,6 +169,7 @@ def tp_for_local_rec(local_rec: Any) -> time:
 def build_cenario_excel(
     timetable: pd.DataFrame,
     modelo_path: str | Path | None = None,
+    planilha3: pd.DataFrame | None = None,
 ) -> bytes:
     path = Path(modelo_path) if modelo_path else MODELO_CENARIO_PADRAO
     if not path.exists():
@@ -177,6 +184,36 @@ def build_cenario_excel(
         raise ValueError("O modelo de cenário não tem cabeçalho na linha 2.")
 
     lookup = _source_lookup(timetable)
+
+    # Planilha3 do arquivo novo:
+    #   coluna A (sem cabeçalho) = Prefixo
+    #   coluna K = Frota
+    #
+    # O mapa é usado para preencher a coluna FROTA do Novo Cenário
+    # a partir do Prefixo existente na TIMETABLE.
+    frota_por_prefixo: dict[str, Any] = {}
+    if planilha3 is not None and not planilha3.empty:
+        if planilha3.shape[1] < 11:
+            raise ValueError(
+                "A Planilha3 precisa ter pelo menos 11 colunas "
+                "(A = Prefixo e K = Frota)."
+            )
+
+        for _, row in planilha3.iterrows():
+            prefixo = row.iloc[0]
+            frota = row.iloc[10]
+
+            prefixo_key = _cell_str(prefixo).strip()
+            if prefixo_key:
+                frota_por_prefixo[prefixo_key] = frota
+
+    # Localiza a coluna Prefixo na TIMETABLE.
+    prefixo_source_col = None
+    for col in timetable.columns:
+        if _norm(col) == "prefixo":
+            prefixo_source_col = col
+            break
+
     sample_row = DATA_START_ROW
     last_template_row = ws.max_row or DATA_START_ROW
     default_values = {
@@ -191,6 +228,20 @@ def build_cenario_excel(
     etapa_cols = [name for name in headers if _is_etapa(name)]
     tp_cols = [name for name in headers if _is_tp(name)]
 
+    etapa_cols = [name for name in headers if _is_etapa(name)]
+    tp_cols = [name for name in headers if _is_tp(name)]
+
+    # --- NOVO ---
+    tipo_col_name = next((name for name in headers if _is_tipo(name)), None)
+    qua_col_name = next((name for name in headers if _is_qua(name)), None)
+
+    # Localiza FROTA no Novo Cenário.
+    frota_col_name = next(
+        (name for name in headers if _norm(name) == "frota"),
+        None,
+    )
+    # ------------
+
     n_rows = len(timetable)
     target_last = DATA_START_ROW + n_rows - 1 if n_rows else DATA_START_ROW - 1
 
@@ -204,6 +255,14 @@ def build_cenario_excel(
         excel_row = DATA_START_ROW + offset
         src = timetable.iloc[offset]
         local_rec_value = None
+
+        # Busca o Prefixo da TIMETABLE na coluna A da Planilha3
+        # e usa o valor da coluna K como FROTA.
+        frota_por_prefixo_valor = None
+        if frota_col_name and prefixo_source_col is not None:
+            prefixo_key = _cell_str(src[prefixo_source_col]).strip()
+            if prefixo_key in frota_por_prefixo:
+                frota_por_prefixo_valor = frota_por_prefixo[prefixo_key]
 
         if local_rec_col_name:
             source_col = resolve_source_column(local_rec_col_name, lookup)
@@ -224,6 +283,18 @@ def build_cenario_excel(
                 cell.value = tp_for_local_rec(local_rec_value)
                 continue
 
+            if _is_tipo(name):
+                continue
+
+            # FROTA vem exclusivamente do cruzamento:
+            # TIMETABLE[Prefixo] -> Planilha3[A] -> Planilha3[K].
+            if frota_col_name and name == frota_col_name:
+                cell.value = _parse_value(
+                    frota_por_prefixo_valor,
+                    sample_cell.value,
+                )
+                continue
+
             source_col = resolve_source_column(name, lookup)
             if source_col is None:
                 cell.value = default_values.get(col_idx)
@@ -236,6 +307,14 @@ def build_cenario_excel(
         for name in tp_cols:
             ws.cell(excel_row, headers[name]).value = tp_for_local_rec(
                 local_rec_value
+            )
+
+        if tipo_col_name and qua_col_name:
+            valor_qua = _cell_str(
+                ws.cell(excel_row, headers[qua_col_name]).value
+            )
+            ws.cell(excel_row, headers[tipo_col_name]).value = (
+                "S" if valor_qua.strip().upper() == "S" else None
             )
 
     out = BytesIO()
