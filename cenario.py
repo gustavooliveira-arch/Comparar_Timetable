@@ -14,9 +14,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from compare import _cell_str, _normalize_column_name
 
-MODELO_CENARIO_PADRAO = Path(
-    r"c:\Users\gustavo.oliveira\Documents\Automação\Timetables\Modelo Cenario.xlsx"
-)
+MODELO_CENARIO_PADRAO = Path(__file__).parent/"Modelo Cenario.xlsx"
 
 HEADER_ROW = 2
 DATA_START_ROW = 3
