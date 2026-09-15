@@ -57,10 +57,6 @@ def _is_tipo(name: str) -> bool:
     return _norm(name) == "tipo"
 
 
-def _is_qua(name: str) -> bool:
-    return _norm(name) == "qua"
-
-
 def _is_local_rec(name: str) -> bool:
     n = _norm(name).replace(" ", "")
     return n.startswith("local(rec")
@@ -226,12 +222,8 @@ def build_cenario_excel(
     etapa_cols = [name for name in headers if _is_etapa(name)]
     tp_cols = [name for name in headers if _is_tp(name)]
 
-    etapa_cols = [name for name in headers if _is_etapa(name)]
-    tp_cols = [name for name in headers if _is_tp(name)]
-
     # --- NOVO ---
     tipo_col_name = next((name for name in headers if _is_tipo(name)), None)
-    qua_col_name = next((name for name in headers if _is_qua(name)), None)
 
     # Localiza FROTA no Novo Cenário.
     frota_col_name = next(
@@ -282,6 +274,7 @@ def build_cenario_excel(
                 continue
 
             if _is_tipo(name):
+                cell.value = "FTR"
                 continue
 
             # FROTA vem exclusivamente do cruzamento:
@@ -305,14 +298,6 @@ def build_cenario_excel(
         for name in tp_cols:
             ws.cell(excel_row, headers[name]).value = tp_for_local_rec(
                 local_rec_value
-            )
-
-        if tipo_col_name and qua_col_name:
-            valor_qua = _cell_str(
-                ws.cell(excel_row, headers[qua_col_name]).value
-            )
-            ws.cell(excel_row, headers[tipo_col_name]).value = (
-                "S" if valor_qua.strip().upper() == "S" else None
             )
 
     out = BytesIO()
