@@ -40,6 +40,8 @@ PREFERRED_SOURCES: dict[str, list[str]] = {
 TP_GR = time(1, 30)
 TP_OUTROS = time(0, 45)
 
+UM_MINUTO = time(0, 1)
+
 
 def _norm(name: Any) -> str:
     return _normalize_column_name(name)
@@ -53,6 +55,16 @@ def _is_etapa(name: str) -> bool:
 def _is_tp(name: str) -> bool:
     n = _norm(name).replace(" ", "")
     return n in {"t.p.", "t.p", "tp"}
+
+
+def _is_te(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n in {"t.e.", "t.e", "te"}
+
+
+def _is_td(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n in {"t.d.", "t.d", "td"}
 
 
 def _is_tipo(name: str) -> bool:
@@ -308,6 +320,11 @@ def build_cenario_excel(
 
             if _is_tipo(name):
                 cell.value = "FTR"
+                continue
+
+            # T.E. e T.D. sempre 1 minuto.
+            if _is_te(name) or _is_td(name):
+                cell.value = UM_MINUTO
                 continue
 
             # FROTA vem exclusivamente do cruzamento:
