@@ -67,6 +67,16 @@ def _is_td(name: str) -> bool:
     return n in {"t.d.", "t.d", "td"}
 
 
+def _is_do_rec(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n in {"d.o.(rec.)", "d.o.(rec)"}
+
+
+def _is_do_lib(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n in {"d.o.(lib.)", "d.o.(lib)"}
+
+
 def _is_tipo(name: str) -> bool:
     return _norm(name) == "tipo"
 
@@ -78,6 +88,11 @@ def _is_servico(name: str) -> bool:
 def _is_local_rec(name: str) -> bool:
     n = _norm(name).replace(" ", "")
     return n.startswith("local(rec")
+
+
+def _is_local_lib(name: str) -> bool:
+    n = _norm(name).replace(" ", "")
+    return n.startswith("local(lib")
 
 
 def _source_lookup(df: pd.DataFrame) -> dict[str, str]:
@@ -238,6 +253,18 @@ def build_cenario_excel(
         (name for name in headers if _is_local_rec(name)),
         None,
     )
+    local_lib_col_name = next(
+        (name for name in headers if _is_local_lib(name)),
+        None,
+    )
+    origem_col_name = next(
+        (name for name in headers if _norm(name) == "origem"),
+        None,
+    )
+    destino_col_name = next(
+        (name for name in headers if _norm(name) == "destino"),
+        None,
+    )
     etapa_cols = [name for name in headers if _is_etapa(name)]
     tp_cols = [name for name in headers if _is_tp(name)]
 
@@ -304,6 +331,24 @@ def build_cenario_excel(
             if source_col is not None:
                 local_rec_value = src[source_col]
 
+        local_lib_value = None
+        if local_lib_col_name:
+            source_col = resolve_source_column(local_lib_col_name, lookup)
+            if source_col is not None:
+                local_lib_value = src[source_col]
+
+        destino_value = None
+        if destino_col_name:
+            destino_source_col = resolve_source_column(destino_col_name, lookup)
+            if destino_source_col is not None:
+                destino_value = src[destino_source_col]
+
+        origem_value = None
+        if origem_col_name:
+            origem_source_col = resolve_source_column(origem_col_name, lookup)
+            if origem_source_col is not None:
+                origem_value = src[origem_source_col]
+
         for name, col_idx in headers.items():
             sample_cell = ws.cell(sample_row, col_idx)
             cell = ws.cell(excel_row, col_idx)
@@ -326,6 +371,27 @@ def build_cenario_excel(
             if _is_te(name) or _is_td(name):
                 cell.value = UM_MINUTO
                 continue
+
+            # D.O. (REC.): se DESTINO === LOCAL (REC.), 1 minuto.
+            if _is_do_rec(name):
+                if (
+                    destino_value is not None
+                    and _cell_str(destino_value) != ""
+                    and _cell_str(destino_value)
+                    == _cell_str(local_rec_value)
+                ):
+                    cell.value = UM_MINUTO
+                    continue
+
+            # D.O. (LIB.): se ORIGEM === LOCAL (LIB.), 1 minuto.
+            if _is_do_lib(name):
+                if (
+                    origem_value is not None
+                    and _cell_str(origem_value) != ""
+                    and _cell_str(origem_value) == _cell_str(local_lib_value)
+                ):
+                    cell.value = UM_MINUTO
+                    continue
 
             # FROTA vem exclusivamente do cruzamento:
             # TIMETABLE[Prefixo] -> FROTA[A] -> FROTA[K].
