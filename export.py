@@ -421,7 +421,6 @@ def build_updated_excel(
     old_bytes: bytes,
     result: CompareResult,
     sheet_name: str,
-    key_cols: list[str] | None = None,
 ) -> bytes:
 
     """

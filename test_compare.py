@@ -5,7 +5,7 @@ from openpyxl import load_workbook
 from openpyxl.styles import Font
 from openpyxl.workbook import Workbook
 
-from compare import compare_by_keys, compare_positional, load_timetable, normalize_frame
+from compare import compare_positional, load_timetable, normalize_frame
 from export import build_updated_excel
 
 
@@ -43,21 +43,6 @@ def test_positional_detects_cell_change_and_new_row():
     assert result.modified[0].new == "Geo"
     assert len(result.added_rows) == 1
     assert result.added_rows.iloc[0]["Dia"] == "Qua"
-
-
-def test_by_key_ignores_row_order():
-    old = normalize_frame(
-        pd.DataFrame({"Codigo": ["T1", "T2"], "Sala": ["A", "B"]})
-    )
-    new = normalize_frame(
-        pd.DataFrame({"Codigo": ["T2", "T1"], "Sala": ["B", "C"]})
-    )
-    result = compare_by_keys(old, new, ["Codigo"])
-    assert result.added_rows.empty
-    assert result.removed_rows.empty
-    assert len(result.modified) == 1
-    assert result.modified[0].old == "A"
-    assert result.modified[0].new == "C"
 
 
 def test_load_timetable_reads_named_sheet():

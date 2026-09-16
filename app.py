@@ -5,7 +5,6 @@ import pandas as pd
 
 from compare import (
     SHEET_NAME,
-    compare_by_keys,
     compare_positional,
     load_timetable,
 )
@@ -145,18 +144,8 @@ st.success(
 )
 
 # ============================================================
-# COLUNAS COMPARTILHADAS
+# UTILITÁRIOS
 # ============================================================
-
-# Comparação normalizada dos nomes
-# para não considerar como diferentes:
-#
-# SERVICO
-# servico
-#  SERVICO
-# SERVICO
-#
-# etc.
 
 def normalize_column_name(name):
 
@@ -166,18 +155,6 @@ def normalize_column_name(name):
         .casefold()
     )
 
-
-new_columns_normalized = {
-    normalize_column_name(c)
-    for c in df_new.columns
-}
-
-shared_cols = [
-    c
-    for c in df_old.columns
-    if normalize_column_name(c)
-    in new_columns_normalized
-]
 
 # ============================================================
 
@@ -280,55 +257,9 @@ def _coluna_correspondente(coluna, origem, destino):
     return None
 
 
-def _construir_indice(chaves, origem, destino):
-    """
-    Cria um mapa (valores das chaves) -> posição da linha em `destino`.
-
-    Sem isso, cada clique numa célula da prévia disparava uma busca
-    linear O(n) em `destino` (ver versão anterior de
-    `_linha_correspondente`). Para planilhas grandes, isso deixava a
-    navegação lenta. Construindo o índice UMA VEZ, logo depois da
-    comparação, a busca de linha correspondente vira O(1).
-    """
-
-    if not chaves:
-        return None
-
-    chaves_destino = []
-
-    for chave in chaves:
-        correspondente = _coluna_correspondente(chave, origem, destino)
-
-        if correspondente is None:
-            return None
-
-        chaves_destino.append(correspondente)
-
-    indice = {}
-
-    for posicao in range(len(destino)):
-        valores = tuple(
-            str(destino.iloc[posicao][coluna])
-            for coluna in chaves_destino
-        )
-
-        # Em caso de chaves duplicadas, mantém a primeira ocorrência
-        # (mesmo comportamento da busca linear original).
-        indice.setdefault(valores, posicao)
-
-    return indice
-
-
-def _linha_correspondente(linha, origem, destino, chaves, indice=None):
+def _linha_correspondente(linha, origem, destino):
     if linha is None or linha < 0 or linha >= len(origem):
         return None
-
-    if chaves and indice is not None:
-        valores = tuple(
-            str(origem.iloc[linha][chave])
-            for chave in chaves
-        )
-        return indice.get(valores)
 
     if linha < len(destino):
         return linha
@@ -336,13 +267,13 @@ def _linha_correspondente(linha, origem, destino, chaves, indice=None):
     return None
 
 
-def _celula_correspondente(celula, origem, destino, chaves, indice=None):
+def _celula_correspondente(celula, origem, destino):
     if not celula or len(celula) != 2:
         return None
 
     linha, coluna = celula[0], celula[1]
     coluna_dest = _coluna_correspondente(coluna, origem, destino)
-    linha_dest = _linha_correspondente(linha, origem, destino, chaves, indice)
+    linha_dest = _linha_correspondente(linha, origem, destino)
 
     if coluna_dest is None or linha_dest is None:
         return None
@@ -362,7 +293,7 @@ def _celulas_do_widget(chave_widget):
         return []
 
 
-def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves, indice=None):
+def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino):
     celulas = _celulas_do_widget(origem_key)
 
     if not celulas:
@@ -375,8 +306,6 @@ def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves
         celulas[0],
         origem,
         destino,
-        chaves,
-        indice,
     )
 
     st.session_state[destino_key] = {
@@ -384,59 +313,6 @@ def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino, chaves
             "cells": [correspondente] if correspondente else []
         }
     }
-
-# ============================================================
-# MODO DE COMPARAÇÃO
-# ============================================================
-
-mode = st.radio(
-    "Como comparar",
-
-    options=[
-        "posição",
-        "chave"
-    ],
-
-    format_func=lambda m: (
-        "Por posição (mesmo layout, linha a linha)"
-        if m == "posição"
-        else
-        "Por chave (linhas podem ter sido reordenadas)"
-    ),
-
-    horizontal=True,
-)
-
-
-# ============================================================
-# CHAVES
-# ============================================================
-
-keys: list[str] = []
-
-if mode == "chave":
-
-    keys = st.multiselect(
-        "Colunas que identificam uma linha "
-        "(ex.: data + horário, código da aula)",
-
-        options=shared_cols,
-
-        default=(
-            shared_cols[:1]
-            if shared_cols
-            else []
-        ),
-    )
-
-    if not keys:
-
-        st.warning(
-            "Selecione pelo menos uma coluna-chave."
-        )
-
-        st.stop()
-
 
 # ============================================================
 # COMPARAR
@@ -449,19 +325,9 @@ if st.button(
 
     try:
 
-        result = (
-            compare_by_keys(
-                df_old,
-                df_new,
-                keys
-            )
-
-            if mode == "chave"
-
-            else compare_positional(
-                df_old,
-                df_new
-            )
+        result = compare_positional(
+            df_old,
+            df_new,
         )
 
     except Exception as exc:
@@ -476,23 +342,6 @@ if st.button(
     # Volta para o início do arquivo antigo
     file_old.seek(0)
 
-    # ----------------------------------------------------
-    # Índices pré-calculados para a navegação da prévia
-    # (evita busca linear O(n) a cada clique numa célula).
-    # Só fazem sentido no modo "chave".
-    # ----------------------------------------------------
-    indice_old_to_new = (
-        _construir_indice(keys, df_old, df_new)
-        if mode == "chave"
-        else None
-    )
-
-    indice_new_to_old = (
-        _construir_indice(keys, df_new, df_old)
-        if mode == "chave"
-        else None
-    )
-
     # Versão da comparação: usada como chave de cache para não
     # regerar os Excels/estilos em reruns que não mudam o resultado
     # (zoom, seleção de célula, gerar cenário etc.).
@@ -506,15 +355,7 @@ if st.button(
 
         "old_bytes": file_old.getvalue(),
 
-        "keys": keys,
-
         "sheet": sheet,
-
-        "mode": mode,
-
-        "indice_old_to_new": indice_old_to_new,
-
-        "indice_new_to_old": indice_new_to_old,
 
         "version": st.session_state.compare_version,
     }
@@ -570,29 +411,6 @@ if not compare:
 # ============================================================
 
 result = compare["result"]
-
-
-# ============================================================
-# CHAVES DUPLICADAS
-# ============================================================
-
-if (
-    result.duplicate_keys_old
-    or result.duplicate_keys_new
-):
-
-    st.warning(
-        "Há chaves duplicadas "
-
-        f"(antigo: "
-        f"{result.duplicate_keys_old}, "
-
-        f"novo: "
-        f"{result.duplicate_keys_new}). "
-
-        "Só a primeira ocorrência de cada chave "
-        "foi usada na comparação."
-    )
 
 
 # ============================================================
@@ -709,11 +527,6 @@ if st.session_state.get("_excel_cache_key") != excel_cache_key:
             compare["old_bytes"],
             result,
             compare["sheet"],
-            key_cols=(
-                compare["keys"]
-                if compare["keys"]
-                else None
-            ),
         )
 
         st.session_state.diff_only_bytes = build_diff_only_excel(
@@ -892,8 +705,6 @@ with tab_prev:
     if "preview_zoom" not in st.session_state:
         st.session_state.preview_zoom = 110
 
-    chaves_previa = compare["keys"] if compare["mode"] == "chave" else []
-
     z1, z2, z3, z4 = st.columns([1.1, 1.1, 1.1, 1.1])
 
     with z1:
@@ -1003,8 +814,6 @@ with tab_prev:
                 "preview_new",
                 df_old,
                 df_new,
-                chaves_previa,
-                compare.get("indice_old_to_new"),
             ),
             selection_mode="single-cell",
             height=table_height,
@@ -1028,8 +837,6 @@ with tab_prev:
                 "preview_old",
                 df_new,
                 df_old,
-                chaves_previa,
-                compare.get("indice_new_to_old"),
             ),
             selection_mode="single-cell",
             height=table_height,
