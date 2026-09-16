@@ -115,12 +115,12 @@ try:
         sheet
     )
 
-    # A Planilha3 também vem do arquivo novo.
+    # A aba FROTA também vem do arquivo novo.
     # Não alteramos df_new: ele continua sendo a TIMETABLE usada
     # na comparação e na prévia.
-    df_planilha3 = pd.read_excel(
+    df_FROTA = pd.read_excel(
         io.BytesIO(file_new.getvalue()),
-        sheet_name="Planilha3",
+        sheet_name="FROTA",
         header=None,
     )
 
@@ -926,7 +926,8 @@ with tab_prev:
         try:
             st.session_state.cenario_bytes = build_cenario_excel(
                 df_new,
-                planilha3=df_planilha3,
+                frota=df_FROTA,
+                timetable_old=df_old,
             )
             st.session_state.cenario_error = None
         except Exception as exc:

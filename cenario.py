@@ -14,7 +14,7 @@ from openpyxl.worksheet.worksheet import Worksheet
 
 from compare import _cell_str, _normalize_column_name
 
-MODELO_CENARIO_PADRAO = Path(__file__).parent/"Modelo Cenario.xlsx"
+MODELO_CENARIO_PADRAO = Path(__file__).parent / "Modelo Cenario.xlsx"
 
 HEADER_ROW = 2
 DATA_START_ROW = 3
@@ -40,6 +40,7 @@ PREFERRED_SOURCES: dict[str, list[str]] = {
 TP_GR = time(1, 30)
 TP_OUTROS = time(0, 45)
 
+
 def _norm(name: Any) -> str:
     return _normalize_column_name(name)
 
@@ -53,8 +54,13 @@ def _is_tp(name: str) -> bool:
     n = _norm(name).replace(" ", "")
     return n in {"t.p.", "t.p", "tp"}
 
+
 def _is_tipo(name: str) -> bool:
     return _norm(name) == "tipo"
+
+
+def _is_servico(name: str) -> bool:
+    return _norm(name) in {"serviço", "servico"}
 
 
 def _is_local_rec(name: str) -> bool:
@@ -163,7 +169,8 @@ def tp_for_local_rec(local_rec: Any) -> time:
 def build_cenario_excel(
     timetable: pd.DataFrame,
     modelo_path: str | Path | None = None,
-    planilha3: pd.DataFrame | None = None,
+    frota: pd.DataFrame | None = None,
+    timetable_old: pd.DataFrame | None = None,
 ) -> bytes:
     path = Path(modelo_path) if modelo_path else MODELO_CENARIO_PADRAO
     if not path.exists():
@@ -179,27 +186,27 @@ def build_cenario_excel(
 
     lookup = _source_lookup(timetable)
 
-    # Planilha3 do arquivo novo:
+    # Aba FROTA do arquivo novo (antiga Planilha3):
     #   coluna A (sem cabeçalho) = Prefixo
     #   coluna K = Frota
     #
     # O mapa é usado para preencher a coluna FROTA do Novo Cenário
     # a partir do Prefixo existente na TIMETABLE.
     frota_por_prefixo: dict[str, Any] = {}
-    if planilha3 is not None and not planilha3.empty:
-        if planilha3.shape[1] < 11:
+    if frota is not None and not frota.empty:
+        if frota.shape[1] < 11:
             raise ValueError(
-                "A Planilha3 precisa ter pelo menos 11 colunas "
+                "A aba FROTA precisa ter pelo menos 11 colunas "
                 "(A = Prefixo e K = Frota)."
             )
 
-        for _, row in planilha3.iterrows():
+        for _, row in frota.iterrows():
             prefixo = row.iloc[0]
-            frota = row.iloc[10]
+            frota_valor = row.iloc[10]
 
             prefixo_key = _cell_str(prefixo).strip()
             if prefixo_key:
-                frota_por_prefixo[prefixo_key] = frota
+                frota_por_prefixo[prefixo_key] = frota_valor
 
     # Localiza a coluna Prefixo na TIMETABLE.
     prefixo_source_col = None
@@ -222,7 +229,6 @@ def build_cenario_excel(
     etapa_cols = [name for name in headers if _is_etapa(name)]
     tp_cols = [name for name in headers if _is_tp(name)]
 
-    # --- NOVO ---
     tipo_col_name = next((name for name in headers if _is_tipo(name)), None)
 
     # Localiza FROTA no Novo Cenário.
@@ -230,7 +236,22 @@ def build_cenario_excel(
         (name for name in headers if _norm(name) == "frota"),
         None,
     )
-    # ------------
+
+    # Localiza SERVIÇO no Novo Cenário e a coluna correspondente
+    # na TIMETABLE antiga (mesmo nome/alias, resolvido via
+    # PREFERRED_SOURCES/resolve_source_column).
+    servico_col_name = next(
+        (name for name in headers if _is_servico(name)),
+        None,
+    )
+
+    old_servico_source_col = None
+    if servico_col_name is not None and timetable_old is not None:
+        old_lookup = _source_lookup(timetable_old)
+        old_servico_source_col = resolve_source_column(
+            servico_col_name,
+            old_lookup,
+        )
 
     n_rows = len(timetable)
     target_last = DATA_START_ROW + n_rows - 1 if n_rows else DATA_START_ROW - 1
@@ -246,13 +267,25 @@ def build_cenario_excel(
         src = timetable.iloc[offset]
         local_rec_value = None
 
-        # Busca o Prefixo da TIMETABLE na coluna A da Planilha3
+        # Busca o Prefixo da TIMETABLE na coluna A da aba FROTA
         # e usa o valor da coluna K como FROTA.
         frota_por_prefixo_valor = None
         if frota_col_name and prefixo_source_col is not None:
             prefixo_key = _cell_str(src[prefixo_source_col]).strip()
             if prefixo_key in frota_por_prefixo:
                 frota_por_prefixo_valor = frota_por_prefixo[prefixo_key]
+
+        # Serviço vem da TIMETABLE antiga, na MESMA posição (linha)
+        # da TIMETABLE nova. Se não houver linha correspondente
+        # (ex.: linha nova adicionada, sem equivalente na antiga),
+        # cai no comportamento padrão (TIMETABLE nova) mais abaixo.
+        servico_old_value = None
+        if (
+            old_servico_source_col is not None
+            and timetable_old is not None
+            and offset < len(timetable_old)
+        ):
+            servico_old_value = timetable_old.iloc[offset][old_servico_source_col]
 
         if local_rec_col_name:
             source_col = resolve_source_column(local_rec_col_name, lookup)
@@ -278,12 +311,27 @@ def build_cenario_excel(
                 continue
 
             # FROTA vem exclusivamente do cruzamento:
-            # TIMETABLE[Prefixo] -> Planilha3[A] -> Planilha3[K].
+            # TIMETABLE[Prefixo] -> FROTA[A] -> FROTA[K].
             if frota_col_name and name == frota_col_name:
                 cell.value = _parse_value(
                     frota_por_prefixo_valor,
                     sample_cell.value,
                 )
+                continue
+
+            # SERVIÇO vem da TIMETABLE antiga, por posição.
+            if servico_col_name and name == servico_col_name:
+                if servico_old_value is not None:
+                    cell.value = _parse_value(servico_old_value, sample_cell.value)
+                else:
+                    # Sem linha correspondente na antiga: usa a
+                    # TIMETABLE nova como alternativa.
+                    fallback_col = resolve_source_column(name, lookup)
+                    cell.value = (
+                        _parse_value(src[fallback_col], sample_cell.value)
+                        if fallback_col is not None
+                        else default_values.get(col_idx)
+                    )
                 continue
 
             source_col = resolve_source_column(name, lookup)
