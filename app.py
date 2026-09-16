@@ -40,7 +40,7 @@ col_old, col_new = st.columns(2)
 with col_old:
 
     file_old = st.file_uploader(
-        "Arquivo antigo (antes)",
+        "Arquivo antigo",
         type=["xlsx", "xls"],
         key="old"
     )
@@ -48,7 +48,7 @@ with col_old:
 with col_new:
 
     file_new = st.file_uploader(
-        "Arquivo novo (depois)",
+        "Arquivo novo",
         type=["xlsx", "xls"],
         key="new"
     )
