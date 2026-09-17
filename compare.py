@@ -19,6 +19,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pandas as pd
 from openpyxl import load_workbook
 from openpyxl.utils import get_column_letter
@@ -643,23 +644,46 @@ def compare_positional(
     removed_cells: list[CellChange] = []
 
     # --------------------------------------------------------
-    # COLUNAS EM COMUM
+    # COLUNAS EM COMUM (vetorizado)
+    #
+    # Em vez de percorrer célula a célula com duas iterações Python,
+    # cada coluna é convertida para texto uma única vez (`.map`) e a
+    # comparação vira uma operação de array NumPy. O loop restante só
+    # toca nas células efetivamente diferentes.
     # --------------------------------------------------------
 
-    for row_idx in range(min_rows):
+    if shared and min_rows > 0:
 
-        for old_col, new_col in shared:
+        old_matrix = np.column_stack(
+            [
+                old[old_col]
+                .iloc[:min_rows]
+                .map(_cell_str)
+                .to_numpy(object)
+                for old_col, _ in shared
+            ]
+        )
 
-            old_value = _cell_str(
-                old.iloc[row_idx][old_col]
-            )
+        new_matrix = np.column_stack(
+            [
+                new[new_col]
+                .iloc[:min_rows]
+                .map(_cell_str)
+                .to_numpy(object)
+                for _, new_col in shared
+            ]
+        )
 
-            new_value = _cell_str(
-                new.iloc[row_idx][new_col]
-            )
+        for row_idx, col_pos in np.argwhere(
+            old_matrix != new_matrix
+        ):
 
-            if old_value == new_value:
-                continue
+            old_col, new_col = shared[col_pos]
+
+            old_value = old_matrix[row_idx, col_pos]
+            new_value = new_matrix[row_idx, col_pos]
+
+            row_idx = int(row_idx)
 
             if old_value == "" and new_value != "":
                 added_cells.append(
@@ -695,7 +719,7 @@ def compare_positional(
                 )
 
     # --------------------------------------------------------
-    # COLUNAS NOVAS
+    # COLUNAS NOVAS (vetorizado)
     # --------------------------------------------------------
 
     for key in new_map:
@@ -705,27 +729,29 @@ def compare_positional(
 
         new_col = new_map[key]
 
-        for row_idx in range(min_rows):
+        col_values = (
+            new[new_col]
+            .iloc[:min_rows]
+            .map(_cell_str)
+            .to_numpy(object)
+        )
 
-            new_value = _cell_str(
-                new.iloc[row_idx][new_col]
-            )
-
-            if new_value == "":
-                continue
+        for row_idx in np.argwhere(
+            col_values != ""
+        ).flatten():
 
             added_cells.append(
                 CellChange(
-                    row=row_idx,
+                    row=int(row_idx),
                     column=new_col,
                     old="",
-                    new=new_value,
+                    new=col_values[row_idx],
                     change_type="adicionada",
                 )
             )
 
     # --------------------------------------------------------
-    # COLUNAS REMOVIDAS
+    # COLUNAS REMOVIDAS (vetorizado)
     # --------------------------------------------------------
 
     for key in old_map:
@@ -735,20 +761,22 @@ def compare_positional(
 
         old_col = old_map[key]
 
-        for row_idx in range(min_rows):
+        col_values = (
+            old[old_col]
+            .iloc[:min_rows]
+            .map(_cell_str)
+            .to_numpy(object)
+        )
 
-            old_value = _cell_str(
-                old.iloc[row_idx][old_col]
-            )
-
-            if old_value == "":
-                continue
+        for row_idx in np.argwhere(
+            col_values != ""
+        ).flatten():
 
             removed_cells.append(
                 CellChange(
-                    row=row_idx,
+                    row=int(row_idx),
                     column=old_col,
-                    old=old_value,
+                    old=col_values[row_idx],
                     new="",
                     change_type="removida",
                 )

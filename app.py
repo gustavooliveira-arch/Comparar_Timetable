@@ -99,6 +99,21 @@ def _carregar_timetable_cache(conteudo: bytes, sheet_name: str):
     )
 
 
+@st.cache_data(show_spinner="Lendo aba FROTA...")
+def _carregar_frota_cache(conteudo: bytes):
+    """Aba FROTA (sem cabeçalho) do arquivo novo.
+
+    Cachead pelos bytes do arquivo: sem isso, o Excel inteiro era
+    reparsed a CADA interação da página (zoom, clique numa célula
+    da prévia), deixando a navegação lenta para arquivos grandes.
+    """
+    return pd.read_excel(
+        io.BytesIO(conteudo),
+        sheet_name="FROTA",
+        header=None,
+    )
+
+
 file_old.seek(0)
 file_new.seek(0)
 
@@ -117,10 +132,8 @@ try:
     # A aba FROTA também vem do arquivo novo.
     # Não alteramos df_new: ele continua sendo a TIMETABLE usada
     # na comparação e na prévia.
-    df_FROTA = pd.read_excel(
-        io.BytesIO(file_new.getvalue()),
-        sheet_name="FROTA",
-        header=None,
+    df_FROTA = _carregar_frota_cache(
+        file_new.getvalue(),
     )
 
 except Exception as exc:
@@ -257,6 +270,44 @@ def _coluna_correspondente(coluna, origem, destino):
     return None
 
 
+def _montar_mapa_colunas(origem, destino):
+    """Pré-computa a coluna correspondente em `destino` para cada
+    coluna de `origem` (mesmo nome, nome normalizado ou mesma
+    posição).
+
+    Mesmo comportamento de `_coluna_correspondente`, mas calculado
+    UMA VEZ por comparação. Sem isso, cada clique numa célula da
+    prévia refazia esse mapeamento (análise de nomes + busca linear)
+    para sincronizar a seleção na outra planilha.
+    """
+    destino_set = set(destino.columns)
+    dest_norm = {
+        normalize_column_name(n): n
+        for n in destino.columns
+    }
+    destino_list = list(destino.columns)
+    origem_list = list(origem.columns)
+
+    mapa = {}
+
+    for i, col in enumerate(origem_list):
+
+        if col in destino_set:
+            mapa[col] = col
+            continue
+
+        norm = normalize_column_name(col)
+
+        if norm in dest_norm:
+            mapa[col] = dest_norm[norm]
+        elif i < len(destino_list):
+            mapa[col] = destino_list[i]
+        else:
+            mapa[col] = None
+
+    return mapa
+
+
 def _linha_correspondente(linha, origem, destino):
     if linha is None or linha < 0 or linha >= len(origem):
         return None
@@ -267,12 +318,17 @@ def _linha_correspondente(linha, origem, destino):
     return None
 
 
-def _celula_correspondente(celula, origem, destino):
+def _celula_correspondente(celula, origem, destino, col_map=None):
     if not celula or len(celula) != 2:
         return None
 
     linha, coluna = celula[0], celula[1]
-    coluna_dest = _coluna_correspondente(coluna, origem, destino)
+
+    if col_map is not None:
+        coluna_dest = col_map.get(coluna)
+    else:
+        coluna_dest = _coluna_correspondente(coluna, origem, destino)
+
     linha_dest = _linha_correspondente(linha, origem, destino)
 
     if coluna_dest is None or linha_dest is None:
@@ -293,7 +349,13 @@ def _celulas_do_widget(chave_widget):
         return []
 
 
-def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino):
+def _sincronizar_selecao_previa(
+    origem_key,
+    destino_key,
+    origem,
+    destino,
+    col_map=None,
+):
     celulas = _celulas_do_widget(origem_key)
 
     if not celulas:
@@ -306,6 +368,7 @@ def _sincronizar_selecao_previa(origem_key, destino_key, origem, destino):
         celulas[0],
         origem,
         destino,
+        col_map,
     )
 
     st.session_state[destino_key] = {
@@ -356,6 +419,11 @@ if st.button(
         "old_bytes": file_old.getvalue(),
 
         "sheet": sheet,
+
+        # Mapas de coluna pré-calculados (O(1) por clique na prévia).
+        "col_old_to_new": _montar_mapa_colunas(df_old, df_new),
+
+        "col_new_to_old": _montar_mapa_colunas(df_new, df_old),
 
         "version": st.session_state.compare_version,
     }
@@ -814,6 +882,7 @@ with tab_prev:
                 "preview_new",
                 df_old,
                 df_new,
+                compare.get("col_old_to_new"),
             ),
             selection_mode="single-cell",
             height=table_height,
@@ -837,6 +906,7 @@ with tab_prev:
                 "preview_old",
                 df_new,
                 df_old,
+                compare.get("col_new_to_old"),
             ),
             selection_mode="single-cell",
             height=table_height,
