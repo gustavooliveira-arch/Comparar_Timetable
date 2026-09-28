@@ -24,6 +24,18 @@ st.set_page_config(
     layout="wide"
 )
 
+# Remove o ícone de âncora/link dos títulos
+st.markdown(
+    """
+    <style>
+    h1 a {
+        display: none !important;
+    }
+    </style>
+    """,
+    unsafe_allow_html=True
+)
+
 st.title("Comparar TIMETABLE")
 
 st.caption(
