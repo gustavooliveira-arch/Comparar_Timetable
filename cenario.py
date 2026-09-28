@@ -42,9 +42,44 @@ TP_OUTROS = time(0, 45)
 
 UM_MINUTO = time(0, 1)
 
+# Ordem importa: a primeira regra que casar vence.
+EMPRESA_SIGLAS: list[tuple[str, str]] = [
+    ("COMETA", "COM"),
+    ("CATARINENSE", "AVC"),
+    ("OPÇÃO", "OPÇ"),
+    ("OPCAO", "OPÇ"),  # variação sem acento/cedilha
+]
+
 
 def _norm(name: Any) -> str:
     return _normalize_column_name(name)
+
+
+def normalizar_empresa(value: Any) -> Any:
+    """Converte o nome da empresa para a sigla usada no cenário.
+
+    - contém COMETA       -> COM
+    - contém CATARINENSE  -> AVC
+    - contém OPÇÃO        -> OPÇ
+    - 1001                -> mantém 1001
+    - qualquer outro valor é mantido como veio.
+    """
+    text = _cell_str(value).strip()
+    if not text:
+        return None
+
+    # 1001 pode chegar como "1001", 1001 ou 1001.0
+    if text.endswith(".0"):
+        text = text[:-2]
+    if text == "1001":
+        return "1001"
+
+    upper = text.upper()
+    for trecho, sigla in EMPRESA_SIGLAS:
+        if trecho in upper:
+            return sigla
+
+    return text
 
 
 def _is_etapa(name: str) -> bool:
@@ -292,6 +327,26 @@ def build_cenario_excel(
             old_lookup,
         )
 
+    # Localiza EMPRESA no Novo Cenário e as colunas correspondentes
+    # nas TIMETABLEs nova e antiga.
+    empresa_col_name = next(
+        (name for name in headers if _norm(name) == "empresa"),
+        None,
+    )
+
+    empresa_new_source_col = (
+        resolve_source_column(empresa_col_name, lookup)
+        if empresa_col_name
+        else None
+    )
+
+    empresa_old_source_col = None
+    if empresa_col_name is not None and timetable_old is not None:
+        empresa_old_source_col = resolve_source_column(
+            empresa_col_name,
+            _source_lookup(timetable_old),
+        )
+
     n_rows = len(timetable)
     target_last = DATA_START_ROW + n_rows - 1 if n_rows else DATA_START_ROW - 1
 
@@ -325,6 +380,20 @@ def build_cenario_excel(
             and offset < len(timetable_old)
         ):
             servico_old_value = timetable_old.iloc[offset][old_servico_source_col]
+
+        # Empresa: TIMETABLE nova; se vazia, cai para a antiga (mesma posição).
+        empresa_value = None
+        if empresa_new_source_col is not None:
+            empresa_value = normalizar_empresa(src[empresa_new_source_col])
+        if (
+            empresa_value is None
+            and empresa_old_source_col is not None
+            and timetable_old is not None
+            and offset < len(timetable_old)
+        ):
+            empresa_value = normalizar_empresa(
+                timetable_old.iloc[offset][empresa_old_source_col]
+            )
 
         if local_rec_col_name:
             source_col = resolve_source_column(local_rec_col_name, lookup)
@@ -415,6 +484,15 @@ def build_cenario_excel(
                         if fallback_col is not None
                         else default_values.get(col_idx)
                     )
+                continue
+
+            # EMPRESA: converte para sigla (COM, AVC, OPÇ) ou mantém 1001.
+            if empresa_col_name and name == empresa_col_name:
+                cell.value = (
+                    _parse_value(empresa_value, sample_cell.value)
+                    if empresa_value is not None
+                    else default_values.get(col_idx)
+                )
                 continue
 
             source_col = resolve_source_column(name, lookup)
